@@ -37,6 +37,7 @@ from multiprocessing import Process, Lock
 from multiprocessing.pool import ThreadPool
 
 import argparse
+from tqdm import tqdm
 
 import plotly.plotly as py
 import plotly.graph_objs as go
@@ -53,28 +54,25 @@ parser = argparse.ArgumentParser(description='Description of your program')
 def draw_chart(df):
 
     trace0 = go.Scatter(
-        x = df['nbr_threads'],
         y = df['took_mean'],
         mode = 'lines+markers',
         name = 'Took'
     )
 
     trace1 = go.Scatter(
-        x = df['nbr_threads'],
         y = df['elapsed_mean'],
         mode = 'lines+markers',
         name = 'Elapsed'
     )
 
     trace3 = go.Scatter(
-        x = df['nbr_threads'],
-        y = df['hits_mean'],
+        y = df['nbr_threads'],
         mode = 'lines+markers',
         name = 'Nbr Hits'
     )
 
 
-    data = [trace0, trace1]
+    data = [trace0, trace1, trace3]
 
     plot(data, filename='line-mode')
 
@@ -82,16 +80,18 @@ def draw_chart(df):
 def search(query):
 
     query = re.sub(r'\W+', ' ', query)
+    row = []
     
     url = "%s/%s/_search/?q=%s" % ( es_host, es_index_name, query )
 
     req = requests.get(url, headers =  { 'Authorization': oauth_token })
     #res =  es.search(index=es_index_name, params = {"q":query})
 
-    print(req)
-
     res = req.json()
-    row = [query,res["took"], (req.elapsed.microseconds/1000) , res["hits"]["total"], res["hits"]["max_score"] ]
+    try:
+        row = [query,res["took"], (req.elapsed.microseconds/1000) , res["hits"]["total"], res["hits"]["max_score"] ]
+    except:
+        row = [query,0, (req.elapsed.microseconds/1000) , 0, 0]
 
     return row
 
@@ -111,7 +111,6 @@ def init():
     search_file = args.search
     oauth_token = args.token
 
-
 if __name__ == "__main__":
 
     init()
@@ -121,33 +120,30 @@ if __name__ == "__main__":
     results_queries = []
     list_index = int(random.uniform(0, len(list_queries) / 2))
 
+    print("\n *** Load Test in Progress *** \n \n")
+
     with open(search_file,'r', encoding='utf8' ) as f:
         list_queries = f.readlines()
 
 
-    for nbr_threads in range(1,101):
-        p = ThreadPool(nbr_threads)
+    for nbr_threads in tqdm(range(1,100,20), ascii= True, desc="Threads", position=1):
 
-        data_to_feed = list_queries[list_index:(list_index+nbr_threads)]
+        for i in tqdm(range(0,10), ascii=True, desc="Reload", position=0):
+            p = ThreadPool(nbr_threads)
 
-        #data_to_feed = list_queries[0:nbr_threads]
+            data_to_feed = list_queries[list_index:(list_index+nbr_threads)]
 
-        pool_output = p.map(search, data_to_feed )
+            pool_output = p.map(search, data_to_feed )
 
-        df = pd.DataFrame(data = pool_output, columns = ['query', 'took', 'elapsed' ,'hits', 'max_score'])
+            df = pd.DataFrame(data = pool_output, columns = ['query', 'took', 'elapsed' ,'hits', 'max_score'])
 
-        df_means = df.mean( axis = 1, skipna= True )
+            df_mean = df.mean( axis = 0, skipna= True)
 
-        #took_mean = (df['took'].sum())/nbr_threads
-        #elapsed_mean = df['elapsed'].mean()
-        #hits_mean = df['hits'].mean()
-        #max_score_mean = df['max_score'].mean()
+            results.append( [ df['query'], nbr_threads, df_mean['took'], df_mean['elapsed'], df_mean['hits'], df_mean['max_score'] ] )
+            #print( "nbr Thread %s" % ( str(nbr_threads) ) )
 
-        results.append( [ df['query'], nbr_threads, df_mean['took'], df_mean['elapsed'], df_mean['hits'], df_mean['max_score'] ] )
-        print( "nbr Thread %s" % ( str(nbr_threads) ) )
-
-        p.terminate()
-        p.join()
+            p.terminate()
+            p.join()
 
 
     df = pd.DataFrame(data = results, columns = ['query','nbr_threads', 'took_mean', 'elapsed_mean' ,'hits_mean', 'max_score_mean'])
